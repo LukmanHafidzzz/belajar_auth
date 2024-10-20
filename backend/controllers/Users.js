@@ -1,7 +1,8 @@
-const Users = require("../models/userModel");
+// const Users = require("../models/userModel");
 const db = require("../config/database");
 const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken")
+const jwt = require("jsonwebtoken");
+const { QueryTypes } = require("sequelize");
 
 const getUsers = async(req, res) => {
     try {
@@ -27,7 +28,10 @@ const Register = async(req, res) => {
     const salt = await bcrypt.genSalt();
     const hashPassword = await bcrypt.hash(password, salt);
     try {
-        await db.query(`INSERT INTO users (name, email, password) VALUES ('${name}', '${email}', '${hashPassword}')`)
+        await db.query(`INSERT INTO users (name, email, password) VALUES ('?', '?', '?')`, {
+            replacements: [name, email, password],
+            type: QueryTypes.INSERT,
+        })
         res.status(200).json({
             message: "Register berhasil"
         });
@@ -38,59 +42,71 @@ const Register = async(req, res) => {
 }
 
 const Login = async(req, res) => {
+    const { email, password } = req.body;
     try {
-        const user = await Users.findAll({
-            where: {
-                email: req.body.email
-            }
+        const [response] = await db.query(`SELECT * FROM users WHERE email = ?`, {
+            replacements: [email],
+            type: QueryTypes.SELECT
         });
-
-        const match = await bcrypt.compare(req.body.password, user[0].password);
-        if (!match) {
-            return res.status(400).json({
-                message: "Wrong password"
+        console.log(response);
+        
+        if (response.length === 0) {
+            return res.status(404).json({
+                message: "Email tidak ditemukan"
             });
         }
 
-        const userId = user[0].id;
-        const name = user[0].name;
-        const email = user[0].email;
-        const accesToken = jwt.sign({
+        const user = response;
+        const match = await bcrypt.compare(password, user.password);
+        if (!match) {
+            return res.status(400).json({
+                message: "Password salah"
+            });
+        }
+
+        const userId = user.id;
+        const name = user.name;
+        const userEmail = user.email;
+
+        const accessToken = jwt.sign({
             userId,
             name,
-            email,
-        },
-        process.env.ACCESS_TOKEN_SECRET, {
+            userEmail,
+        }, 
+        process.env.ACCESS_TOKEN_SECRET,
+        {
             expiresIn: '20s'
         });
+
         const refreshToken = jwt.sign({
             userId,
             name,
-            email,
-        },
-        process.env.REFRESH_TOKEN_SECRET, {
+            userEmail,
+        }, 
+        process.env.REFRESH_TOKEN_SECRET,
+        {
             expiresIn: '1d'
         });
-        await Users.update({
-            refresh_token: refreshToken
-        }, {
-            where: {
-                id: userId
-            }
+
+        await db.query(`UPDATE users SET refresh_token = ? WHERE id = ?`, {
+            replacements: [refreshToken, userId],
+            type: QueryTypes.UPDATE
         });
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
             maxAge: 24 * 60 * 60 * 1000,
             // secure: true,
         });
+
         res.json({
-            accesToken
-        })
-    } catch (error) {
-        res.status(404).json({
-            message: "Email tidak ditemukan"
+            accessToken
         });
-    };
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({
+            message: "Internal server error"
+        });
+    }
 }
 
 module.exports = {
